@@ -22,29 +22,38 @@ def get_complement_dictionary(dict1, dict2):
 
 
 class target_function:
-    def __init__(self, keys, var_types):
+    def __init__(self, keys, var_types, n_cases=1000, constraint_variable='# Tests Needed',
+                 constraint_on_test=90, constraint_on_trace=90, constraint_on_quarantine=300):
         self.keys = keys
         self.var_types = var_types
         self.dims = len(self.keys)
-        self.other_output = []
-        self.main_output = []
         self.result_cache = dict()
         self.cache_used = 0
-        self.constraint_value = 95
 
+        #------------------------- set up constraint variable and constraint value ------
+        self.target_variable = "Effective R"
+        self.constraint_variable = constraint_variable
+        # ["Base R", "# Manual Traces", "# Tests Needed","# PersonDays Quarantined"]
+        self.constraint_value = {
+            "# Tests Needed": constraint_on_test,
+            "# Manual Traces": constraint_on_trace,
+            "# PersonDays Quarantined": constraint_on_quarantine
+        }
+        self.constraint_on_test_num = constraint_on_test
+        self.constraint_on_trace_num = constraint_on_trace
+        self.constraint_on_quarantine = constraint_on_quarantine
+        self.n_cases = n_cases
+
+        #------------------------- Variable used in the TTIModel -------------------------
         path_to_bbc_data = os.path.join("data", "bbc-pandemic")
         self.over18 = load_csv(os.path.join(path_to_bbc_data, "contact_distributions_o18.csv"))
         self.under18 = load_csv(os.path.join(path_to_bbc_data, "contact_distributions_u18.csv"))
         self.rng = np.random.RandomState(42)
-
         name = 'S3_test_based_TTI_test_contacts'
-
         self.case_config = config.get_case_config("delve")
         self.contacts_config = config.get_contacts_config("delve")
         self.policy_config = config.get_strategy_configs("delve", name)[name]
-
         self.strategy_config = utils.get_sub_dictionary(self.policy_config, config.DELVE_STRATEGY_FACTOR_KEYS)
-
         # scale factor to turn simulation numbers into UK population numbers
         self.nppl = self.case_config['infection_proportions']['nppl']
 
@@ -84,28 +93,6 @@ class target_function:
                 self.result_cache[tuple(x)] = (res[0],res[1])
         return Y
 
-    def f_withConst(self, X):
-        Y = np.zeros((len(X),1))
-        Y_c = np.zeros((len(X),1))
-        for n in range(len(X)):
-            x = X[n,:]
-            if tuple(x) in self.result_cache:
-                print("cache used! ")
-                self.cache_used += 1
-                Y[n,:] = self.result_cache[tuple(x)][0]
-                Y_c[n,:] = self.result_cache[tuple(x)][1]-self.constraint_value
-            else:
-                input = dict()
-                for i, k in enumerate(self.keys):
-                    input[k] = x[i]
-                res = self.target(**input)
-                self.main_output.append(res[0])
-                self.other_output.append(res[1])
-                Y[n,:] = res[0]
-                Y_c[n,:] = res[1]-self.constraint_value
-                self.result_cache[tuple(x)] = (res[0],res[1])
-        return Y, Y_c
-
     def c1(self, x):
         input = dict()
         if tuple(x) in self.result_cache:
@@ -120,10 +107,36 @@ class target_function:
             self.result_cache[tuple(x)] = (res[0], res[1])
         return c1
 
+    def f_withSingleConst(self, X):
+        '''
+        target function wrapper on TTIModel return effective R with single constraint on one of
+        ["# Manual Traces", "# Tests Needed","# PersonDays Quarantined"]
+        :param X: Input variable dimension [num_points, num_input_variables]
+        :return: [Y, Y_constraint]
+        '''
+        Y = np.zeros((len(X),1))
+        Y_c = np.zeros((len(X),1))
+        for n in range(len(X)):
+            x = X[n,:]
+            if tuple(x) in self.result_cache:
+                print("TTIModel Results Cache used! ")
+                self.cache_used += 1
+                Y[n,:] = self.result_cache[tuple(x)][self.target_variable]
+                Y_c[n,:] = self.result_cache[tuple(x)][self.constraint_variable]-self.constraint_value[self.constraint_variable]
+            else:
+                input = dict()
+                for i, k in enumerate(self.keys):
+                    input[k] = x[i]
+                res = self.target(**input)
+                Y[n,:] = res[self.target_variable]
+                Y_c[n,:] = res[self.constraint_variable]-self.constraint_value[self.constraint_variable]
+                self.result_cache[tuple(x)] = res
+        return Y, Y_c
+
     def target(
             self,
-            test_contacts_on_positive,
             max_contacts,
+            test_contacts_on_positive=1,
             go_to_school_prob=0.5,
             wfh_prob=0.65,
             isolate_individual_on_symptoms=1,  # Isolate the individual after they present with symptoms
@@ -137,6 +150,8 @@ class target_function:
             isolate_household_on_positive=1,  # Isolate the household after individual test positive
             isolate_contacts_on_symptoms=1,  # Isolate the contacts after individual present with symptoms
             isolate_contacts_on_positive=1,  # Isolate the contacts after individual test positive
+            testing_delay=2,
+            manual_trace_delay=1
     ):
         factor_config = {
             "app_cov": app_cov,
@@ -160,6 +175,8 @@ class target_function:
             'max_contacts': int(max_contacts),
             'app_cov': int(app_cov),
             'compliance': int(compliance),
+            'testing_delay': int(testing_delay),
+            'manual_trace_delay': int(manual_trace_delay)
         }
 
 
@@ -171,12 +188,11 @@ class target_function:
 
         tti_model = TTISampleModel(self.rng, **input_strategy_config, **fixed_strategy_config)
 
-        n_cases = 1000
         outputs = list()
 
         # reduced_r, tests, 'man_trace', 'quarantine', 'base_r'
         start = time.time()
-        for _ in range(n_cases):
+        for _ in range(self.n_cases):
             case = simulate_case(self.rng, **self.case_config)
             case_factors = CaseFactors.simulate_from(self.rng, case, **factor_config)
             contacts = simulate_contacts(case, **self.contacts_config)
@@ -188,17 +204,14 @@ class target_function:
         # outputs = np.array(outputs)
         # This cell is mosltly just formatting results...
 
-        # to_show = [
-        #     RETURN_KEYS.base_r,
-        #     RETURN_KEYS.reduced_r,
-        #     RETURN_KEYS.tests,
-        #     RETURN_KEYS.man_trace,
-        #     RETURN_KEYS.quarantine
-        # ]
+        # ["Base R", "# Manual Traces", "# App Traces", "# Tests Needed","# PersonDays Quarantined"]
 
         to_show = [
             RETURN_KEYS.reduced_r,
-            RETURN_KEYS.tests
+            RETURN_KEYS.tests,
+            RETURN_KEYS.man_trace,
+            RETURN_KEYS.quarantine,
+            RETURN_KEYS.base_r,
         ]
 
         scales = []
@@ -208,13 +221,13 @@ class target_function:
             else:
                 scales.append(self.nppl)
 
-        results = pd.DataFrame(outputs).mean(0).loc[to_show].mul(scales).\
-            to_frame(name=f"Simulation results").\
-            rename(index=lambda x: x + " (k per day)" if x.startswith("#") else x)
+        results = pd.DataFrame(outputs).mean(0).loc[to_show].mul(scales)
+            # to_frame(name=f"Simulation results")
+            # rename(index=lambda x: x + " (k per day)" if x.startswith("#") else x)
 
-        final_result = results.iloc[:,0].values
+        # final_result = results.iloc[:, 0].values
         # print(results.round(1))
-        return final_result
+        return results.to_dict()
     #
     # n_iterations = 5
     #
