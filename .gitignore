@@ -149,3 +149,4 @@ data/populations
 .DS_Store
 
 COPY/
+LOG/
