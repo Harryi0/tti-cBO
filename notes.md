@@ -55,17 +55,17 @@ effective R value
         function emulated with e.g. GP
             1. Bayesian Optimization with Unknown Constraints: https://arxiv.org/pdf/1403.5607.pdf
             2. Pull request for UnknownConstraintBayesianOptimizationLoop: https://github.com/EmuKit/emukit/pull/217/files
-    - [ ] Some Problems: how to choose the right kernel function? Non-negative value can not be well-modeled by a GP prior? why 
+    - [x] Choose the kernel function for both the Objective and constraint function using log marginal likelihood on the 
+    initial points
+    - [ ] (?) try to change the function (objective/constraint) to log function and use GP prior 
 
+* [X] Test cBO with other single constraint: **number of Manual Traces**
 
-* [ ] Test cBO with other single constraint: **number of Manual Traces**
-
-* [ ] Test cBO with other single constraint: **number of PersonDays Quarantined**
+* [X] Test cBO with other single constraint: **number of PersonDays Quarantined**
 
 * [ ] Test cBO with multiple constraint (?): 
+    - Could combine the three resource constraints (# tests; # traces; # quarantines) output into one function
 
 * [ ] Design a cost function as a constraint (?) on the input variables
 
 * [ ] What about the noise? 
-
-                                                                             

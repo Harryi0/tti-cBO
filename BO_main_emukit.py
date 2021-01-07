@@ -24,28 +24,30 @@ from emukit.core.optimization import GradientAcquisitionOptimizer
 if __name__ == "__main__":
     space = [
         {'name': 'isolate_individual_on_symptoms', 'type': 'discrete', 'domain': (0, 1)},
-             {'name': 'isolate_individual_on_positive', 'type': 'discrete', 'domain': (0, 1)},
-             {'name': 'isolate_household_on_symptoms', 'type': 'discrete', 'domain': (0, 1)},
-             {'name': 'isolate_household_on_positive', 'type': 'discrete', 'domain': (0, 1)},
-             {'name': 'isolate_contacts_on_symptoms', 'type': 'discrete', 'domain': (0, 1)},
-             {'name': 'isolate_contacts_on_positive', 'type': 'discrete', 'domain': (0, 1)},
-             {'name': 'test_contacts_on_positive', 'type': 'discrete', 'domain': (0, 1)},
-             {'name': 'do_symptom_testing', 'type': 'discrete', 'domain': (0, 1)},
-             {'name': 'do_manual_tracing', 'type': 'discrete', 'domain': (0, 1)},
-             {'name': 'do_app_tracing', 'type': 'discrete', 'domain': (0, 1)},
-             {'name': 'max_contacts', 'type': 'discrete', 'domain': (1, 4, 10, 20, 2000)},
-             {'name': 'app_cov', 'type': 'discrete', 'domain': (0.35, 0.55)},
-             {'name': 'compliance', 'type': 'discrete', 'domain': (0.8, 1)},
-             {'name': 'go_to_school_prob', 'type': 'discrete', 'domain': (0, 0.5, 1)},
-             {'name': 'wfh_prob', 'type': 'continuous', 'domain': (0, 1)}
+        # {'name': 'isolate_individual_on_positive', 'type': 'discrete', 'domain': (0, 1)},
+        {'name': 'isolate_household_on_symptoms', 'type': 'discrete', 'domain': (0, 1)},
+        # {'name': 'isolate_household_on_positive', 'type': 'discrete', 'domain': (0, 1)},
+        {'name': 'isolate_contacts_on_symptoms', 'type': 'discrete', 'domain': (0, 1)},
+        # {'name': 'isolate_contacts_on_positive', 'type': 'discrete', 'domain': (0, 1)},
+        {'name': 'test_contacts_on_positive', 'type': 'discrete', 'domain': (0, 1)},
+        {'name': 'do_symptom_testing', 'type': 'discrete', 'domain': (0, 1)},
+        {'name': 'do_manual_tracing', 'type': 'discrete', 'domain': (0, 1)},
+        {'name': 'do_app_tracing', 'type': 'discrete', 'domain': (0, 1)},
+        {'name': 'max_contacts', 'type': 'discrete', 'domain': (1, 4, 10, 20, 2000)},
+        # {'name': 'app_cov', 'type': 'discrete', 'domain': (0.35, 0.55, 0.75)},
+        # {'name': 'compliance', 'type': 'discrete', 'domain': (0.8, 1)},
+        {'name': 'go_to_school_prob', 'type': 'continuous', 'domain': (0, 1)},
+        {'name': 'wfh_prob', 'type': 'continuous', 'domain': (0.25, 0.65)}
     ]
 
     keys = [item['name'] for item in space]
     var_types = [item['type'] for item in space]
 
-    func = target_function(keys, var_types)
+    # constraint_variable from one of ["# Manual Traces", "# Tests Needed"]
+    func = target_function(keys, var_types, n_cases=1000, constraint_variable="# PersonDays Quarantined")
+    constraint_value = func.constraint_value[func.constraint_variable]
 
-    constraint_1 = NonlinearInequalityConstraint(func.c1, lower_bound=None, upper_bound=np.array([90]))
+    # constraint_1 = NonlinearInequalityConstraint(func.c1, lower_bound=None, upper_bound=np.array([90]))
 
     emukit_parameters = []
     for input in space:
@@ -65,7 +67,7 @@ if __name__ == "__main__":
     ######### get Y with multi-dimensional x
     # Y_initial = func.f_multi(X_initial)
     ######### get Y and Y_c at the same time
-    Y_initial, Y_c_initial = func.f_withConst(X_initial)
+    Y_initial, Y_c_initial = func.f_withSingleConst(X_initial)
 
 
     ######### gpy model with no unknow constraint
@@ -73,10 +75,41 @@ if __name__ == "__main__":
     # gpy_model = GPy.models.GPRegression(X_initial, Y_initial, kern, noise_var=1e-10)
     # emukit_model = GPyModelWrapper(gpy_model)
     ######### gpy model for objective function and the constraint function
-    gpy_model = GPy.models.GPRegression(X_initial, Y_initial)
+
+    ######### Kernel selection based on marginal log likelihood
+    kern_obj01 = GPy.kern.RBF(input_dim=X_initial.shape[1], variance=1.0, lengthscale=1.0)
+    kern_obj02 = GPy.kern.Linear(input_dim=X_initial.shape[1])
+    kern_obj03 = ((GPy.kern.RBF(input_dim=X_initial.shape[1], variance=1.0, lengthscale=1.0))+
+                (GPy.kern.Linear(input_dim=X_initial.shape[1])))
+    kern_obj04 = ((GPy.kern.RBF(input_dim=X_initial.shape[1], variance=1.0, lengthscale=1.0))+
+                (GPy.kern.Linear(input_dim=X_initial.shape[1]))+
+                GPy.kern.White(input_dim=X_initial.shape[1], variance=0.1))
+    allkerns = [kern_obj01, kern_obj02, kern_obj03, kern_obj04]
+
+    #--------------------- setup the GP model for objective function
+    alllikelihood = np.zeros(len(allkerns))
+    for i, kernel in enumerate(allkerns):
+        alllikelihood[i] = GPy.models.GPRegression(X_initial, Y_initial, kernel=kernel).log_likelihood()
+        print("Objective model: kernel No. {} with marginal loglikelihood {}".format(i+1, alllikelihood[i]))
+    optimal_kern_idx = np.argmax(alllikelihood)
+    print("Kernel No {} is the optimal for Objective function".format(optimal_kern_idx+1))
+    gpy_model = GPy.models.GPRegression(X_initial, Y_initial, kernel=allkerns[optimal_kern_idx])
+    # gpy_model.Gaussian_noise.constrain_fixed(1e-4, warning=False)
+    gpy_model.optimize()
     emukit_model = GPyModelWrapper(gpy_model)
     # Make GPy constraint model
-    gpy_constraint_model = GPy.models.GPRegression(X_initial, Y_c_initial)
+
+    #--------------------- setup the GP model for constraint function
+    alllikelihood_constraint = np.zeros(len(allkerns))
+    for i, kernel in enumerate(allkerns):
+        alllikelihood_constraint[i] = GPy.models.GPRegression(X_initial, Y_c_initial, kernel=kernel).log_likelihood()
+        print("Constraint model: kernel No. {} with marginal loglikelihood {}".format(i+1, alllikelihood_constraint[i]))
+    optimal_kern_idx_constraint = np.argmax(alllikelihood_constraint)
+    print("Kernel No {} is the optimal for constraint function".format(optimal_kern_idx_constraint+1))
+
+    gpy_constraint_model = GPy.models.GPRegression(X_initial, Y_c_initial, kernel=allkerns[optimal_kern_idx_constraint])
+    # gpy_constraint_model.Gaussian_noise.constrain_fixed(1e-4, warning=False)
+    gpy_constraint_model.optimize()
     constraint_model = GPyModelWrapper(gpy_constraint_model)
 
     expected_improvement = ExpectedImprovement(emukit_model)
@@ -93,15 +126,15 @@ if __name__ == "__main__":
                                                                     space=emukit_space,
                                                                     acquisition=expected_improvement,
                                                                     model_constraint=constraint_model)
-    bayesopt_uncon_loop.run_loop(UserFunctionWrapper(func.f_withConst, extra_output_names=['Y_constraint']),
+    bayesopt_uncon_loop.run_loop(UserFunctionWrapper(func.f_withSingleConst, extra_output_names=['Y_constraint']),
                                  FixedIterationsStoppingCondition(max_iterations))
     loopstate = bayesopt_uncon_loop.loop_state
 
     iters_X, iters_Y = loopstate.X, loopstate.Y.flatten()
 
-    iters_Y_c = np.array([r.extra_outputs['Y_constraint'][0]+func.constraint_value for r in loopstate.results])
+    iters_Y_c = np.array([r.extra_outputs['Y_constraint'][0]+constraint_value for r in loopstate.results])
 
-    Y_Y_c = pd.DataFrame({'Y':iters_Y, 'Y_c':iters_Y_c})
+    Y_Y_c = pd.DataFrame({'Y': iters_Y, 'Y_c': iters_Y_c})
 
     print(Y_Y_c.round(2))
 
@@ -117,6 +150,16 @@ if __name__ == "__main__":
     results = results[['Y', 'Y_c']+keys]
 
     print(results)
+
+    results_withConst = results[results.Y_c <= constraint_value]
+
+    optimal_result = results_withConst.iloc[np.argmin(results_withConst.Y),:]
+
+    # print("constrain on total test number below {}".format(func.constraint_on_test_num))
+    # print("constrain on total manual trace number below {}".format(func.constraint_on_trace_num))
+    print("single constrain on {} < {}".format(func.constraint_variable, constraint_value))
+
+    print(optimal_result)
 
     print("finish cBO")
 
