@@ -122,14 +122,43 @@ class target_function:
                 print("TTIModel Results Cache used! ")
                 self.cache_used += 1
                 Y[n,:] = self.result_cache[tuple(x)][self.target_variable]
-                Y_c[n,:] = self.result_cache[tuple(x)][self.constraint_variable]-self.constraint_value[self.constraint_variable]
+                Y_c[n,:] = self.result_cache[tuple(x)][self.constraint_variable] - \
+                           self.constraint_value[self.constraint_variable]
             else:
                 input = dict()
                 for i, k in enumerate(self.keys):
                     input[k] = x[i]
                 res = self.target(**input)
                 Y[n,:] = res[self.target_variable]
-                Y_c[n,:] = res[self.constraint_variable]-self.constraint_value[self.constraint_variable]
+                Y_c[n, :] = res[self.constraint_variable] - self.constraint_value[self.constraint_variable]
+                self.result_cache[tuple(x)] = res
+        return Y, Y_c
+
+    def logf_withSingleConst(self, X):
+        '''
+        target function wrapper on TTIModel return effective R with single constraint on one of
+        ["# Manual Traces", "# Tests Needed","# PersonDays Quarantined"]
+        :param X: Input variable dimension [num_points, num_input_variables]
+        :return: log value for [Y, Y_constraint]
+        '''
+        Y = np.zeros((len(X),1))
+        Y_c = np.zeros((len(X),1))
+        for n in range(len(X)):
+            x = X[n,:]
+            if tuple(x) in self.result_cache:
+                print("TTIModel Results Cache used! ")
+                self.cache_used += 1
+                Y[n,:] = np.log(self.result_cache[tuple(x)][self.target_variable])
+                Y_c[n,:] = np.log(self.result_cache[tuple(x)][self.constraint_variable])-\
+                           np.log(self.constraint_value[self.constraint_variable])
+            else:
+                input = dict()
+                for i, k in enumerate(self.keys):
+                    input[k] = x[i]
+                res = self.target(**input)
+                Y[n,:] = np.log(res[self.target_variable])
+                Y_c[n, :] = np.log(res[self.constraint_variable]) - \
+                            np.log(self.constraint_value[self.constraint_variable])
                 self.result_cache[tuple(x)] = res
         return Y, Y_c
 

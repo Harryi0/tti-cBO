@@ -24,11 +24,11 @@ from emukit.core.optimization import GradientAcquisitionOptimizer
 if __name__ == "__main__":
     space = [
         {'name': 'isolate_individual_on_symptoms', 'type': 'discrete', 'domain': (0, 1)},
-        # {'name': 'isolate_individual_on_positive', 'type': 'discrete', 'domain': (0, 1)},
+        {'name': 'isolate_individual_on_positive', 'type': 'discrete', 'domain': (0, 1)},
         {'name': 'isolate_household_on_symptoms', 'type': 'discrete', 'domain': (0, 1)},
-        # {'name': 'isolate_household_on_positive', 'type': 'discrete', 'domain': (0, 1)},
+        {'name': 'isolate_household_on_positive', 'type': 'discrete', 'domain': (0, 1)},
         {'name': 'isolate_contacts_on_symptoms', 'type': 'discrete', 'domain': (0, 1)},
-        # {'name': 'isolate_contacts_on_positive', 'type': 'discrete', 'domain': (0, 1)},
+        {'name': 'isolate_contacts_on_positive', 'type': 'discrete', 'domain': (0, 1)},
         {'name': 'test_contacts_on_positive', 'type': 'discrete', 'domain': (0, 1)},
         {'name': 'do_symptom_testing', 'type': 'discrete', 'domain': (0, 1)},
         {'name': 'do_manual_tracing', 'type': 'discrete', 'domain': (0, 1)},
@@ -37,15 +37,17 @@ if __name__ == "__main__":
         # {'name': 'app_cov', 'type': 'discrete', 'domain': (0.35, 0.55, 0.75)},
         # {'name': 'compliance', 'type': 'discrete', 'domain': (0.8, 1)},
         {'name': 'go_to_school_prob', 'type': 'continuous', 'domain': (0, 1)},
-        {'name': 'wfh_prob', 'type': 'continuous', 'domain': (0.25, 0.65)}
+        {'name': 'wfh_prob', 'type': 'continuous', 'domain': (0.25, 0.95)}
     ]
 
     keys = [item['name'] for item in space]
     var_types = [item['type'] for item in space]
 
     # constraint_variable from one of ["# Manual Traces", "# Tests Needed"]
-    func = target_function(keys, var_types, n_cases=1000, constraint_variable="# PersonDays Quarantined")
+    func = target_function(keys, var_types, n_cases=10000, constraint_variable="# Tests Needed", constraint_on_test=90)
     constraint_value = func.constraint_value[func.constraint_variable]
+
+    use_log_function = True
 
     # constraint_1 = NonlinearInequalityConstraint(func.c1, lower_bound=None, upper_bound=np.array([90]))
 
@@ -67,7 +69,10 @@ if __name__ == "__main__":
     ######### get Y with multi-dimensional x
     # Y_initial = func.f_multi(X_initial)
     ######### get Y and Y_c at the same time
-    Y_initial, Y_c_initial = func.f_withSingleConst(X_initial)
+    if use_log_function:
+        Y_initial, Y_c_initial = func.logf_withSingleConst(X_initial)
+    else:
+        Y_initial, Y_c_initial = func.f_withSingleConst(X_initial)
 
 
     ######### gpy model with no unknow constraint
@@ -84,30 +89,40 @@ if __name__ == "__main__":
     kern_obj04 = ((GPy.kern.RBF(input_dim=X_initial.shape[1], variance=1.0, lengthscale=1.0))+
                 (GPy.kern.Linear(input_dim=X_initial.shape[1]))+
                 GPy.kern.White(input_dim=X_initial.shape[1], variance=0.1))
-    allkerns = [kern_obj01, kern_obj02, kern_obj03, kern_obj04]
+    allkerns_obj = [kern_obj01, kern_obj02, kern_obj03, kern_obj04]
 
     #--------------------- setup the GP model for objective function
-    alllikelihood = np.zeros(len(allkerns))
-    for i, kernel in enumerate(allkerns):
+    alllikelihood = np.zeros(len(allkerns_obj))
+    for i, kernel in enumerate(allkerns_obj):
         alllikelihood[i] = GPy.models.GPRegression(X_initial, Y_initial, kernel=kernel).log_likelihood()
         print("Objective model: kernel No. {} with marginal loglikelihood {}".format(i+1, alllikelihood[i]))
     optimal_kern_idx = np.argmax(alllikelihood)
     print("Kernel No {} is the optimal for Objective function".format(optimal_kern_idx+1))
-    gpy_model = GPy.models.GPRegression(X_initial, Y_initial, kernel=allkerns[optimal_kern_idx])
+    gpy_model = GPy.models.GPRegression(X_initial, Y_initial, kernel=allkerns_obj[optimal_kern_idx])
     # gpy_model.Gaussian_noise.constrain_fixed(1e-4, warning=False)
     gpy_model.optimize()
     emukit_model = GPyModelWrapper(gpy_model)
     # Make GPy constraint model
 
     #--------------------- setup the GP model for constraint function
-    alllikelihood_constraint = np.zeros(len(allkerns))
-    for i, kernel in enumerate(allkerns):
+    kern_con01 = GPy.kern.RBF(input_dim=X_initial.shape[1], variance=1.0, lengthscale=1.0)
+    kern_con02 = GPy.kern.Linear(input_dim=X_initial.shape[1])
+    kern_con03 = ((GPy.kern.RBF(input_dim=X_initial.shape[1], variance=1.0, lengthscale=1.0))+
+                (GPy.kern.Linear(input_dim=X_initial.shape[1])))
+    kern_con04 = ((GPy.kern.RBF(input_dim=X_initial.shape[1], variance=1.0, lengthscale=1.0))+
+                (GPy.kern.Linear(input_dim=X_initial.shape[1]))+
+                GPy.kern.White(input_dim=X_initial.shape[1], variance=0.1))
+    allkerns_con = [kern_con01, kern_con02, kern_con03, kern_con04]
+
+    alllikelihood_constraint = np.zeros(len(allkerns_con))
+    for i, kernel in enumerate(allkerns_con):
         alllikelihood_constraint[i] = GPy.models.GPRegression(X_initial, Y_c_initial, kernel=kernel).log_likelihood()
         print("Constraint model: kernel No. {} with marginal loglikelihood {}".format(i+1, alllikelihood_constraint[i]))
     optimal_kern_idx_constraint = np.argmax(alllikelihood_constraint)
     print("Kernel No {} is the optimal for constraint function".format(optimal_kern_idx_constraint+1))
 
-    gpy_constraint_model = GPy.models.GPRegression(X_initial, Y_c_initial, kernel=allkerns[optimal_kern_idx_constraint])
+
+    gpy_constraint_model = GPy.models.GPRegression(X_initial, Y_c_initial, kernel=allkerns_con[optimal_kern_idx_constraint])
     # gpy_constraint_model.Gaussian_noise.constrain_fixed(1e-4, warning=False)
     gpy_constraint_model.optimize()
     constraint_model = GPyModelWrapper(gpy_constraint_model)
@@ -126,13 +141,23 @@ if __name__ == "__main__":
                                                                     space=emukit_space,
                                                                     acquisition=expected_improvement,
                                                                     model_constraint=constraint_model)
-    bayesopt_uncon_loop.run_loop(UserFunctionWrapper(func.f_withSingleConst, extra_output_names=['Y_constraint']),
+    if use_log_function:
+        bayesopt_uncon_loop.run_loop(UserFunctionWrapper(func.logf_withSingleConst, extra_output_names=['Y_constraint']),
                                  FixedIterationsStoppingCondition(max_iterations))
-    loopstate = bayesopt_uncon_loop.loop_state
+        loopstate = bayesopt_uncon_loop.loop_state
 
-    iters_X, iters_Y = loopstate.X, loopstate.Y.flatten()
+        iters_X, iters_Y = loopstate.X, np.exp(loopstate.Y.flatten())
+        iters_Y_c = np.array([np.exp(r.extra_outputs['Y_constraint'][0]) * constraint_value for r in loopstate.results])
+    else:
+        bayesopt_uncon_loop.run_loop(UserFunctionWrapper(func.f_withSingleConst, extra_output_names=['Y_constraint']),
+                                 FixedIterationsStoppingCondition(max_iterations))
+        loopstate = bayesopt_uncon_loop.loop_state
 
-    iters_Y_c = np.array([r.extra_outputs['Y_constraint'][0]+constraint_value for r in loopstate.results])
+        iters_X, iters_Y = loopstate.X, loopstate.Y.flatten()
+        iters_Y_c = np.array([r.extra_outputs['Y_constraint'][0] + constraint_value for r in loopstate.results])
+
+
+
 
     Y_Y_c = pd.DataFrame({'Y': iters_Y, 'Y_c': iters_Y_c})
 

@@ -57,7 +57,8 @@ effective R value
             2. Pull request for UnknownConstraintBayesianOptimizationLoop: https://github.com/EmuKit/emukit/pull/217/files
     - [x] Choose the kernel function for both the Objective and constraint function using log marginal likelihood on the 
     initial points
-    - [ ] (?) try to change the function (objective/constraint) to log function and use GP prior 
+    - [x] (?) try to change the function (objective/constraint) to log function and use GP prior  
+        - cBO perform better for 10k cases sample, but sometimes perform worse for 1k cases sample (not totally understand? )
 
 * [X] Test cBO with other single constraint: **number of Manual Traces**
 
